@@ -1,0 +1,33 @@
+---
+title: "Architecture"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Architecture}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## Class-diagram
+
+![Classdiagram](uml_classes.svg)
+
+Note that the object-oriented concepts are realized via the 
+R6-package and that R6 actually does not have a real 
+interface-functionality or abstract classes.
+
+## Other files and methods
+* `LikelihoodFunctions.R` :
+  + `loglik_xy()`
+  + `loglik_xzd()`
+* `ResamplingSchemes.R` :
+  + `resample_param()`
+  + `resample_param_rsmplx()`
+  + `resample_param_cens()`

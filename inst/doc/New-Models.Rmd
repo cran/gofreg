@@ -1,0 +1,164 @@
+---
+title: "New-Models"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{New-Models}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  comment = "#>"
+)
+```
+
+```{r, echo = FALSE, message = FALSE}
+library(gofreg)
+```
+
+The package offers several models (mostly GLMs) that can be used for parametric
+regression and a subsequent goodness-of-fit test. However, there might be other 
+models that the user wishes to use in their analysis. In the following, we will
+describe how custom models can be defined and used along with the package.
+
+## The abstract base class `ParamRegrModel`
+
+Whenever the user wants to define a new model, they have to create an R6 class 
+inheriting from the abstract base class `ParamRegrModel`. In particular, the 
+following methods have to be implemented:
+
+* `f_yx()` evaluating the conditional density function
+* `F_yx()` evaluating the conditional distribution function
+* `F1_yx()` evaluating the conditional quantile function
+* `mean_yx()` evaluating the regression function $(\mathbb{E}[Y|X=x])$
+* `sample_yx()` generating a sample of response variables according to the
+  conditional distribution
+* `fit()` handling the shape of the `params` argument and applying the 
+  `fit()`-method of the abstract base class
+
+It is recommended to check the correct shape of the `params` argument in all 
+five methods above. Usually, it is a `list()` with tags corresponding to the
+model parameters.
+
+**Important note:** When evaluating the likelihood function, `f_yx` (and `F_yx`
+as well in case of censored data) will be called with the argument `params`
+being a plain numeric vector instead of a list. This case should be minded in 
+the checks at the beginning of these methods.
+
+## Example
+
+In the following example, we will define a new model of the form
+$(Y|X) \sim \mathcal{N}(\mu(X), \sigma(X))$ with $\mu(X) = a + e^{b^T x}$ and
+$\sigma(X) = c^T x^2$ (where the squaring is performed element-wise).
+
+``` {r}
+CustomModel <- R6::R6Class(
+  classname = "CustomModel",
+  inherit = ParamRegrModel,
+  public = list(
+    
+    f_yx = function(t, x, params = private$params) {
+      if (checkmate::test_atomic_vector(params)) {
+        # reshape plain numeric vector into list with appropriate tags
+        xcol <- ncol(as.matrix(x))
+        checkmate::assert_atomic_vector(params, len = 1 + 2 * xcol)
+        params <- list(a = params[1], 
+                       b = params[2:(1+xcol)], 
+                       c = params[(2+xcol):(1+2*xcol)])
+      } else {
+        private$check_params(params, x)
+      }
+      dnorm(t, mean = self$mean_yx(x, params), 
+               sd = as.matrix(x)^2 %*% params$c)
+    },
+    
+    F_yx = function(t, x, params = private$params) {
+      if (checkmate::test_atomic_vector(params)) {
+        # reshape plain numeric vector into list with appropriate tags
+        xcol <- ncol(as.matrix(x))
+        checkmate::assert_atomic_vector(params, len = 1 + 2 * xcol)
+        params <- list(a = params[1], 
+                       b = params[2:(1+xcol)], 
+                       c = params[(2+xcol):(1+2*xcol)])
+      } else {
+        private$check_params(params, x)
+      }
+      pnorm(t, mean = self$mean_yx(x, params), 
+               sd = as.matrix(x)^2 %*% params$c)
+    },
+    
+    F1_yx = function(t, x, params = private$params) {
+      private$check_params(params, x)
+      qnorm(t, mean = self$mean_yx(x, params), 
+               sd = as.matrix(x)^2 %*% params$c)
+    },
+    
+    sample_yx = function(x, params = private$params) {
+      private$check_params(params, x)
+      rnorm(nrow(as.matrix(x)), mean = self$mean_yx(x, params), 
+                                sd = as.matrix(x)^2 %*% params$c)
+    },
+    
+    mean_yx = function(x, params = private$params) {
+      private$check_params(params, x)
+      params$a + exp(as.matrix(x) %*% params$b)
+    },
+    
+    fit = function(data, params_init = private$params, loglik = loglik_xy, inplace = FALSE) {
+      checkmate::assert_names(names(data), must.include = c("x"))
+      private$check_params(params_init, data$x)
+      params_opt <- super$fit(data, params_init = unlist(params_init, use.names = FALSE), 
+                                    loglik = loglik)
+      xcol <- ncol(as.matrix(x))
+      params_opt <-list(a = params_opt[1], 
+                        b = params_opt[2:(1+xcol)], 
+                        c = params_opt[(2+xcol):(1+2*xcol)])
+      if (inplace) {
+        private$params <- params_opt
+        invisible(self)
+      } else {
+        params_opt
+      }
+    }
+  ),
+  
+  private = list(
+    check_params = function(params, x) {
+      checkmate::assert_list(params, len = 3)
+      checkmate::assert_names(names(params), identical.to = c("a", "b", "c"))
+      checkmate::assert_vector(params$b, len = ncol(as.matrix(x)))
+      checkmate::assert_vector(params$c, len = ncol(as.matrix(x)))
+    }
+  )
+)
+```
+
+Now, let us generate some data following this new model.
+
+``` {r}
+set.seed(123)
+n  <- 100
+x <- cbind(rnorm(n), runif(n))
+model <- CustomModel$new()
+params_true <- list(a = 0.8, b = c(0.5, 0.7), c = c(0.1, 0.2))
+y <- model$sample_yx(x, params_true)
+data <- dplyr::tibble(x = x, y = y)
+head(data)
+```
+
+Fitting the model to the generated data should yield good estimates of the
+model parameters.
+
+``` {r}
+model$fit(data, params_init = list(a = 1, b = c(1,1), c = c(1,1)), inplace = TRUE)
+model$get_params()
+```
+
+Further, a goodness-of-fit test should not reject the (correct) model, i.e.
+yield a rather high p-value.
+
+``` {r}
+gt <- GOFTest$new(data = data, model_fitted = model, test_stat = CondKolmY$new(), nboot = 100)
+gt$get_pvalue()
+```
